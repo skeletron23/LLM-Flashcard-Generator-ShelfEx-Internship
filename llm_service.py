@@ -56,7 +56,7 @@ class LLMService:
 
         try:
             # Call the Gemini API
-            model = self.client.GenerativeModel('gemini-pro') # Using gemini-pro for text generation
+           model = self.client.GenerativeModel('gemini-1.0-pro') # Using gemini-1.0-pro for text generation
             
             response = model.generate_content(
                 messages,
