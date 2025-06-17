@@ -1,0 +1,113 @@
+# llm_service.py
+import os
+from dotenv import load_dotenv
+from openai import OpenAI
+import httpx # This import is crucial for the proxy fix
+
+# Load environment variables from .env file
+load_dotenv()
+
+class LLMService:
+    def __init__(self):
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY environment variable not set. Please create a .env file with OPENAI_API_KEY='your_api_key_here'.")
+
+        # Temporarily clear proxy environment variables for the current process
+        original_http_proxy = os.environ.pop("HTTP_PROXY", None)
+        original_https_proxy = os.environ.pop("HTTPS_PROXY", None)
+        original_no_proxy = os.environ.pop("NO_PROXY", None)
+        original_http_proxy_lower = os.environ.pop("http_proxy", None)
+        original_https_proxy_lower = os.environ.pop("https_proxy", None)
+        original_no_proxy_lower = os.environ.pop("no_proxy", None)
+
+        configured_http_client = None
+        try:
+            # Attempt to configure httpx client to explicitly not use proxies
+            configured_http_client = httpx.Client(proxies={})
+        except Exception as e:
+            print(f"Warning: Could not initialize httpx.Client with empty proxies: {e}. Proceeding without explicit httpx client configuration.")
+            # If httpx.Client(proxies={}) fails, configured_http_client remains None
+            # This allows OpenAI to fall back to its default internal http client.
+
+        # Initialize OpenAI client. Only pass http_client if it was successfully configured.
+        if configured_http_client:
+            self.client = OpenAI(
+                api_key=api_key,
+                http_client=configured_http_client # Pass the configured httpx client
+            )
+        else:
+            # Fallback: Initialize OpenAI without an explicit http_client if configuration failed
+            self.client = OpenAI(
+                api_key=api_key
+            )
+
+
+        # Restore original environment variables after client initialization (optional, but good practice)
+        if original_http_proxy is not None:
+            os.environ["HTTP_PROXY"] = original_http_proxy
+        if original_https_proxy is not None:
+            os.environ["HTTPS_PROXY"] = original_https_proxy
+        if original_no_proxy is not None:
+            os.environ["NO_PROXY"] = original_no_proxy
+        if original_http_proxy_lower is not None:
+            os.environ["http_proxy"] = original_http_proxy_lower
+        if original_https_proxy_lower is not None:
+            os.environ["https_proxy"] = original_https_proxy_lower
+        if original_no_proxy_lower is not None:
+            os.environ["no_proxy"] = original_no_proxy_lower
+
+    def generate_flashcards(self, content: str, subject_type: str = None) -> list:
+        system_message_content = """You are an AI assistant specialized in generating educational flashcards.
+        Your task is to convert provided content into concise question-answer flashcards.
+        Each flashcard should have a clear question and a factual, self-contained answer.
+        Generate at least 10-15 flashcards.
+        If a subject type is provided, tailor questions and answers to that domain where appropriate.
+        For each flashcard, also try to identify a concise topic.
+
+        Output format:
+        [
+            {{
+                "question": "...",
+                "answer": "...",
+                "topic": "..."
+            }},
+            {{
+                "question": "...",
+                "answer": "...",
+                "topic": "..."
+            }}
+        ]
+        Ensure the output is a valid JSON array of objects.
+        """
+
+        user_message_content = f"Generate flashcards from the following content:\n\n{content}"
+        if subject_type:
+            user_message_content = f"Generate flashcards for a {subject_type} subject from the following content:\n\n{content}"
+
+        messages = [
+            {"role": "system", "content": system_message_content},
+            {"role": "user", "content": user_message_content}
+        ]
+
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                response_format={"type": "json_object"},
+                messages=messages,
+                temperature=0.7
+            )
+            flashcards_json = response.choices[0].message.content
+            import json
+            flashcards = json.loads(flashcards_json)
+
+            if not isinstance(flashcards, list):
+                raise ValueError("LLM did not return a JSON array.")
+            for card in flashcards:
+                if not all(k in card for k in ["question", "answer"]):
+                    raise ValueError("Flashcard missing 'question' or 'answer'.")
+            return flashcards
+
+        except Exception as e:
+            print(f"Error generating flashcards: {e}")
+            return []
