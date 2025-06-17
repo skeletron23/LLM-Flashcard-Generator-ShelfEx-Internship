@@ -2,7 +2,7 @@
 import os
 from dotenv import load_dotenv
 import google.generativeai as genai
-import httpx # Still needed as a dependency of openai, but not directly used for Gemini here
+import json # Import json for parsing the model's output
 
 # Load environment variables from .env file
 load_dotenv()
@@ -12,15 +12,11 @@ class LLMService:
         # Gemini API Key
         api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
-            raise ValueError("GOOGLE_API_KEY environment variable not set. Please create a .env file with GOOGLE_API_KEY='your_api_key_here'.")
+            raise ValueError("GOOGLE_API_KEY environment variable not set. Please add it to your Streamlit Cloud secrets.")
 
         # Configure the Google Generative AI client
         genai.configure(api_key=api_key)
         self.client = genai
-
-        # Note: The proxy handling logic for httpx (from OpenAI troubleshooting) is removed
-        # as it's not directly relevant to the google-generativeai library's
-        # typical setup, which handles its own http client.
 
     def generate_flashcards(self, content: str, subject_type: str = None) -> list:
         # Define the system message for the LLM
@@ -71,23 +67,22 @@ class LLMService:
             )
 
             # Parse the JSON response
-            # Gemini's response structure might be slightly different, access .text or check content
             flashcards_json = response.text
-            import json
+            
+            # Gemini sometimes wraps JSON in markdown, so attempt to clean it
+            if flashcards_json.strip().startswith("```json") and flashcards_json.strip().endswith("```"):
+                flashcards_json = flashcards_json.strip()[7:-3].strip()
+            
             flashcards = json.loads(flashcards_json)
 
             # Basic validation of flashcard structure
             if not isinstance(flashcards, list):
-                # Sometimes the model wraps the JSON in markdown code blocks
-                if flashcards_json.strip().startswith("```json") and flashcards_json.strip().endswith("```"):
-                    flashcards_json = flashcards_json.strip()[7:-3].strip()
-                    flashcards = json.loads(flashcards_json)
-                else:
-                    raise ValueError("LLM did not return a valid JSON array or a parsable JSON string.")
+                raise ValueError("LLM did not return a valid JSON array or a parsable JSON string.")
             
             for card in flashcards:
-                if not all(k in card for k in ["question", "answer"]):
-                    raise ValueError("Flashcard missing 'question' or 'answer'.")
+                if not all(k in card for k in ["question", "answer", "topic"]):
+                    # Ensure 'topic' is also present as per the prompt
+                    raise ValueError("Flashcard missing 'question', 'answer', or 'topic'.")
             return flashcards
 
         except Exception as e:
