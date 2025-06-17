@@ -1,22 +1,25 @@
 # llm_service.py
 import os
 from dotenv import load_dotenv
-import google.generativeai as genai
-import json # Import json for parsing the model's output
+import openai # Changed from google.generativeai
+import json
 
 # Load environment variables from .env file
 load_dotenv()
 
 class LLMService:
     def __init__(self):
-        # Gemini API Key
-        api_key = os.getenv("GOOGLE_API_KEY")
+        # OpenRouter API Key
+        api_key = os.getenv("OPENROUTER_API_KEY") # Changed environment variable name
         if not api_key:
-            raise ValueError("GOOGLE_API_KEY environment variable not set. Please add it to your Streamlit Cloud secrets.")
+            raise ValueError("OPENROUTER_API_KEY environment variable not set. Please add it to your Streamlit Cloud secrets.")
 
-        # Configure the Google Generative AI client
-        genai.configure(api_key=api_key)
-        self.client = genai
+        # Configure the OpenRouter client (OpenAI compatible)
+        # The base_url points to OpenRouter's API
+        self.client = openai.OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+        )
 
     def generate_flashcards(self, content: str, subject_type: str = None) -> list:
         # Define the system message for the LLM
@@ -29,16 +32,16 @@ class LLMService:
 
         Output format:
         [
-            {{
+            {
                 "question": "...",
                 "answer": "...",
                 "topic": "..."
-            }},
-            {{
+            },
+            {
                 "question": "...",
                 "answer": "...",
                 "topic": "..."
-            }}
+            }
         ]
         Ensure the output is a valid JSON array of objects.
         """
@@ -49,27 +52,23 @@ class LLMService:
             user_message_content = f"Generate flashcards for a {subject_type} subject from the following content:\n\n{content}"
 
         messages = [
-            {"role": "user", "parts": [system_message_content]}, # System instructions as first user part
-            {"role": "model", "parts": ["Okay, I will generate flashcards based on the provided content."]},
-            {"role": "user", "parts": [user_message_content]}
+            {"role": "system", "content": system_message_content}, # Changed to system role for OpenAI
+            {"role": "user", "content": user_message_content}
         ]
 
         try:
-            # Call the Gemini API
-           model = self.client.GenerativeModel('gemini-1.0-pro') # Using gemini-1.0-pro for text generation
-            
-            response = model.generate_content(
-                messages,
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0.7, # Adjust creativity as needed
-                    response_mime_type="application/json" # Request JSON output
-                )
+            # Call the OpenRouter API with a Phi model
+            response = self.client.chat.completions.create(
+                model="microsoft/phi-4-reasoning:free", # Using the Phi-4 Reasoning model from OpenRouter
+                messages=messages,
+                temperature=0.7,
+                response_format={"type": "json_object"} # Request JSON output for OpenAI compatible APIs
             )
 
             # Parse the JSON response
-            flashcards_json = response.text
+            flashcards_json = response.choices[0].message.content
             
-            # Gemini sometimes wraps JSON in markdown, so attempt to clean it
+            # OpenRouter should return clean JSON if response_format is set, but keep parsing robust
             if flashcards_json.strip().startswith("```json") and flashcards_json.strip().endswith("```"):
                 flashcards_json = flashcards_json.strip()[7:-3].strip()
             
@@ -81,10 +80,12 @@ class LLMService:
             
             for card in flashcards:
                 if not all(k in card for k in ["question", "answer", "topic"]):
-                    # Ensure 'topic' is also present as per the prompt
                     raise ValueError("Flashcard missing 'question', 'answer', or 'topic'.")
             return flashcards
 
+        except openai.APIStatusError as e:
+            print(f"OpenRouter API Error: {e.status_code} - {e.response}")
+            return []
         except Exception as e:
-            print(f"Error generating flashcards with Gemini: {e}")
+            print(f"Error generating flashcards with OpenRouter: {e}")
             return []
